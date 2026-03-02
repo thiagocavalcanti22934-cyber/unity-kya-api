@@ -6,19 +6,26 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type",
 };
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
-
 export async function OPTIONS() {
   return new Response(null, { status: 204, headers: corsHeaders });
 }
 
 export async function POST(req) {
   try {
-    const formData = await req.formData();
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const bucket = process.env.SUPABASE_BUCKET || "kyc";
 
+    if (!supabaseUrl || !supabaseKey) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Missing Supabase env vars" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    const formData = await req.formData();
     const unityDealId = formData.get("unity_deal_id");
 
     if (!unityDealId || !/^UNITY-\d+$/.test(unityDealId)) {
@@ -28,44 +35,47 @@ export async function POST(req) {
       );
     }
 
-    const bucket = process.env.SUPABASE_BUCKET;
-
-    async function uploadFile(fieldName, docType) {
+    async function uploadOne(fieldName, folderName) {
       const file = formData.get(fieldName);
-      if (!file || !file.name) return null;
+      if (!(file instanceof File) || file.size === 0) {
+        return null;
+      }
 
-      const fileBuffer = Buffer.from(await file.arrayBuffer());
+      // Safe-ish filename
+      const original = (file.name || "file").replace(/[^\w.\-]+/g, "_");
+      const path = `kyc/${unityDealId}/${folderName}/${Date.now()}_${original}`;
 
-      const filePath = `kyc/${unityDealId}/${docType}/${Date.now()}-${file.name}`;
+      const bytes = new Uint8Array(await file.arrayBuffer());
 
-      const { error: uploadError } = await supabase.storage
+      const { error: upErr } = await supabase.storage
         .from(bucket)
-        .upload(filePath, fileBuffer, {
-          contentType: file.type,
+        .upload(path, bytes, {
+          contentType: file.type || "application/octet-stream",
+          upsert: false,
         });
 
-      if (uploadError) throw uploadError;
+      if (upErr) throw new Error(`Upload failed for ${fieldName}: ${upErr.message}`);
 
-      const { error: dbError } = await supabase
-        .from("kyc_documents")
-        .insert({
-          unity_deal_id: unityDealId,
-          doc_type: docType,
-          storage_path: filePath,
-        });
+      const { error: dbErr } = await supabase.from("kyc_documents").insert({
+        unity_deal_id: unityDealId,
+        doc_type: folderName,
+        storage_path: path,
+        uploaded_at: new Date().toISOString(),
+      });
 
-      if (dbError) throw dbError;
+      if (dbErr) throw new Error(`DB insert failed for ${fieldName}: ${dbErr.message}`);
 
-      return filePath;
+      return path;
     }
 
-    const proofOfIdPath = await uploadFile("proof_of_id", "proof_of_id");
-    const proofOfAddressPath = await uploadFile("proof_of_address", "proof_of_address");
-    const proofOfFundsPath = await uploadFile("proof_of_funds", "proof_of_funds");
+    const proofOfIdPath = await uploadOne("proof_of_id", "proof_of_id");
+    const proofOfAddressPath = await uploadOne("proof_of_address", "proof_of_address");
+    const proofOfFundsPath = await uploadOne("proof_of_funds", "proof_of_funds");
 
     return new Response(
       JSON.stringify({
         ok: true,
+        unity_deal_id: unityDealId,
         uploaded: {
           proof_of_id: proofOfIdPath,
           proof_of_address: proofOfAddressPath,
@@ -76,7 +86,7 @@ export async function POST(req) {
     );
   } catch (err) {
     return new Response(
-      JSON.stringify({ ok: false, error: err.message }),
+      JSON.stringify({ ok: false, error: err?.message || String(err) }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
