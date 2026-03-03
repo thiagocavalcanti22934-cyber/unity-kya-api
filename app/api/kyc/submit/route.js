@@ -1,13 +1,32 @@
 import { createClient } from "@supabase/supabase-js";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-};
+const allowedOrigins = [
+  "https://unityproperty.co.uk",
+  "https://www.unityproperty.co.uk"
+];
 
-export async function OPTIONS() {
-  return new Response(null, { status: 204, headers: corsHeaders });
+function getCorsHeaders(origin) {
+  if (allowedOrigins.includes(origin)) {
+    return {
+      "Access-Control-Allow-Origin": origin,
+      "Access-Control-Allow-Methods": "POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type",
+    };
+  }
+
+  return {
+    "Access-Control-Allow-Origin": allowedOrigins[0],
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+  };
+}
+
+export async function OPTIONS(req) {
+  const origin = req.headers.get("origin");
+  return new Response(null, {
+    status: 204,
+    headers: getCorsHeaders(origin),
+  });
 }
 
 export async function POST(req) {
@@ -21,13 +40,13 @@ export async function POST(req) {
     if (!supabaseUrl || !supabaseKey) {
       return new Response(
         JSON.stringify({ ok: false, error: "Missing Supabase env vars" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
       );
     }
     if (!hubspotToken) {
       return new Response(
         JSON.stringify({ ok: false, error: "Missing HUBSPOT_ACCESS_TOKEN" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 500, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
       );
     }
 
@@ -40,7 +59,7 @@ export async function POST(req) {
     if (!unityDealId || !/^UNITY-\d+$/.test(unityDealId)) {
       return new Response(
         JSON.stringify({ ok: false, error: "Invalid unity_deal_id" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
       );
     }
 
@@ -60,7 +79,7 @@ export async function POST(req) {
     if (!rawName || !email || !phone) {
       return new Response(
         JSON.stringify({ ok: false, error: "Missing required fields: name/email/phone" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 400, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
       );
     }
 
@@ -166,7 +185,7 @@ export async function POST(req) {
           submission_id: submissionRow?.id || null,
           uploaded: { proof_of_id: proofOfId, proof_of_address: proofOfAddress, proof_of_funds: proofOfFunds },
         }),
-        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 404, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
       );
     }
 
@@ -178,7 +197,7 @@ export async function POST(req) {
           submission_id: submissionRow?.id || null,
           uploaded: { proof_of_id: proofOfId, proof_of_address: proofOfAddress, proof_of_funds: proofOfFunds },
         }),
-        { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        { status: 409, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
       );
     }
 
@@ -223,12 +242,12 @@ export async function POST(req) {
         },
         hubspot_updated_properties: propertiesToUpdate,
       }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 200, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
     );
   } catch (err) {
     return new Response(
       JSON.stringify({ ok: false, error: err?.message || String(err) }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      { status: 500, headers: { ...getCorsHeaders(req.headers.get("origin")), "Content-Type": "application/json" } }
     );
   }
 }
