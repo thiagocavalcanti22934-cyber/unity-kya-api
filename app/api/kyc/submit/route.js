@@ -15,7 +15,7 @@ export async function POST(req) {
     // --- ENV ---
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const bucket = process.env.SUPABASE_BUCKET || "KYC"; // your bucket is "KYC"
+    const bucket = process.env.SUPABASE_BUCKET || "KYC"; // your bucket name is "KYC"
     const hubspotToken = process.env.HUBSPOT_ACCESS_TOKEN;
 
     if (!supabaseUrl || !supabaseKey) {
@@ -35,13 +35,51 @@ export async function POST(req) {
 
     // --- Read form ---
     const formData = await req.formData();
-    const unityDealId = formData.get("unity_deal_id");
 
+    const unityDealId = (formData.get("unity_deal_id") || "").toString().trim();
     if (!unityDealId || !/^UNITY-\d+$/.test(unityDealId)) {
       return new Response(
         JSON.stringify({ ok: false, error: "Invalid unity_deal_id" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
+    }
+
+    // --- Extra fields (Supabase only) ---
+    const rawName = (formData.get("name") || "").toString().trim();
+    const email = (formData.get("email") || "").toString().trim();
+    const phone = (formData.get("phone") || "").toString().trim();
+    const additionalInfo = (formData.get("additional_info") || "").toString().trim();
+
+    // Radio group: you said data-name="title_radio"
+    // This will be the key ONLY if the radio inputs have name="title_radio"
+    const titleRadio = (formData.get("title_radio") || "").toString().trim();
+
+    // Name = Radio value + space + #name
+    const composedName = `${titleRadio}${titleRadio ? " " : ""}${rawName}`.trim();
+
+    if (!rawName || !email || !phone) {
+      return new Response(
+        JSON.stringify({ ok: false, error: "Missing required fields: name/email/phone" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Store submission details (Supabase only)
+    const { data: submissionRow, error: submissionErr } = await supabase
+      .from("kyc_submissions")
+      .insert({
+        unity_deal_id: unityDealId,
+        name: composedName,
+        email,
+        phone,
+        additional_info: additionalInfo || null,
+        submitted_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (submissionErr) {
+      throw new Error(`Submission insert failed: ${submissionErr.message}`);
     }
 
     // --- Upload helper (returns path + signedUrl) ---
@@ -125,6 +163,7 @@ export async function POST(req) {
         JSON.stringify({
           ok: false,
           error: `No HubSpot deal found for unity_deal_id=${unityDealId}`,
+          submission_id: submissionRow?.id || null,
           uploaded: { proof_of_id: proofOfId, proof_of_address: proofOfAddress, proof_of_funds: proofOfFunds },
         }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -136,6 +175,7 @@ export async function POST(req) {
         JSON.stringify({
           ok: false,
           error: `Multiple HubSpot deals found for unity_deal_id=${unityDealId}. Must be unique.`,
+          submission_id: submissionRow?.id || null,
           uploaded: { proof_of_id: proofOfId, proof_of_address: proofOfAddress, proof_of_funds: proofOfFunds },
         }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -168,7 +208,14 @@ export async function POST(req) {
       JSON.stringify({
         ok: true,
         unity_deal_id: unityDealId,
+        submission_id: submissionRow?.id || null,
         hubspot_deal_id: hubspotDealId,
+        submission_saved_to_supabase: {
+          name: composedName,
+          email,
+          phone,
+          additional_info: additionalInfo || null,
+        },
         uploaded: {
           proof_of_id: proofOfId,
           proof_of_address: proofOfAddress,
