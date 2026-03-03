@@ -15,7 +15,7 @@ export async function POST(req) {
     // --- ENV ---
     const supabaseUrl = process.env.SUPABASE_URL;
     const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    const bucket = process.env.SUPABASE_BUCKET || "KYC"; // you currently use "KYC"
+    const bucket = process.env.SUPABASE_BUCKET || "KYC"; // your bucket is "KYC"
     const hubspotToken = process.env.HUBSPOT_ACCESS_TOKEN;
 
     if (!supabaseUrl || !supabaseKey) {
@@ -44,7 +44,7 @@ export async function POST(req) {
       );
     }
 
-    // --- Upload helpers ---
+    // --- Upload helper (returns path + signedUrl) ---
     async function uploadOne(fieldName, folderName) {
       const file = formData.get(fieldName);
       if (!(file instanceof File) || file.size === 0) return null;
@@ -72,13 +72,21 @@ export async function POST(req) {
 
       if (dbErr) throw new Error(`DB insert failed for ${fieldName}: ${dbErr.message}`);
 
-      return path;
+      // Signed URL (30 days)
+      const expiresIn = 60 * 60 * 24 * 30;
+      const { data: signed, error: signErr } = await supabase.storage
+        .from(bucket)
+        .createSignedUrl(path, expiresIn);
+
+      if (signErr) throw new Error(`Signed URL failed for ${fieldName}: ${signErr.message}`);
+
+      return { path, signedUrl: signed.signedUrl };
     }
 
     // --- 1) Upload to Supabase ---
-    const proofOfIdPath = await uploadOne("proof_of_id", "proof_of_id");
-    const proofOfAddressPath = await uploadOne("proof_of_address", "proof_of_address");
-    const proofOfFundsPath = await uploadOne("proof_of_funds", "proof_of_funds");
+    const proofOfId = await uploadOne("proof_of_id", "proof_of_id");
+    const proofOfAddress = await uploadOne("proof_of_address", "proof_of_address");
+    const proofOfFunds = await uploadOne("proof_of_funds", "proof_of_funds");
 
     // --- 2) Find HubSpot deal by unity_deal_id ---
     const searchRes = await fetch("https://api.hubapi.com/crm/v3/objects/deals/search", {
@@ -117,7 +125,7 @@ export async function POST(req) {
         JSON.stringify({
           ok: false,
           error: `No HubSpot deal found for unity_deal_id=${unityDealId}`,
-          uploaded: { proof_of_id: proofOfIdPath, proof_of_address: proofOfAddressPath, proof_of_funds: proofOfFundsPath },
+          uploaded: { proof_of_id: proofOfId, proof_of_address: proofOfAddress, proof_of_funds: proofOfFunds },
         }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -128,7 +136,7 @@ export async function POST(req) {
         JSON.stringify({
           ok: false,
           error: `Multiple HubSpot deals found for unity_deal_id=${unityDealId}. Must be unique.`,
-          uploaded: { proof_of_id: proofOfIdPath, proof_of_address: proofOfAddressPath, proof_of_funds: proofOfFundsPath },
+          uploaded: { proof_of_id: proofOfId, proof_of_address: proofOfAddress, proof_of_funds: proofOfFunds },
         }),
         { status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -136,11 +144,11 @@ export async function POST(req) {
 
     const hubspotDealId = results[0].id;
 
-    // --- 3) Update HubSpot deal properties with Supabase paths ---
+    // --- 3) Update HubSpot deal properties with SIGNED URLs ---
     const propertiesToUpdate = {};
-    if (proofOfIdPath) propertiesToUpdate.kyc_proof_of_id = proofOfIdPath;
-    if (proofOfAddressPath) propertiesToUpdate.kyc_proof_of_address = proofOfAddressPath;
-    if (proofOfFundsPath) propertiesToUpdate.kyc_proof_of_funds = proofOfFundsPath;
+    if (proofOfId) propertiesToUpdate.kyc_proof_of_id = proofOfId.signedUrl;
+    if (proofOfAddress) propertiesToUpdate.kyc_proof_of_address = proofOfAddress.signedUrl;
+    if (proofOfFunds) propertiesToUpdate.kyc_proof_of_funds = proofOfFunds.signedUrl;
 
     const updateRes = await fetch(`https://api.hubapi.com/crm/v3/objects/deals/${hubspotDealId}`, {
       method: "PATCH",
@@ -162,9 +170,9 @@ export async function POST(req) {
         unity_deal_id: unityDealId,
         hubspot_deal_id: hubspotDealId,
         uploaded: {
-          proof_of_id: proofOfIdPath,
-          proof_of_address: proofOfAddressPath,
-          proof_of_funds: proofOfFundsPath,
+          proof_of_id: proofOfId,
+          proof_of_address: proofOfAddress,
+          proof_of_funds: proofOfFunds,
         },
         hubspot_updated_properties: propertiesToUpdate,
       }),
