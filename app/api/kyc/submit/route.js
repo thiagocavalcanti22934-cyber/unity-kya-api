@@ -2,7 +2,8 @@ import { createClient } from "@supabase/supabase-js";
 
 const allowedOrigins = [
   "https://unityproperty.co.uk",
-  "https://www.unityproperty.co.uk"
+  "https://www.unityproperty.co.uk",
+  "https://unity-property.webflow.io"
 ];
 
 function getCorsHeaders(origin) {
